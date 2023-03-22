@@ -1,0 +1,11 @@
+Usage of ./beacon-cache-proxy:
+  -addr string
+    	Address for the proxy to listen on (default "127.0.0.1:55052")
+  -bn-url string
+    	URL to the beacon node to proxy, eg, http://0.0.0.0:5052
+  -data-dir string
+    	Path in which to save cache data (default "/tmp/treegen-proxy")
+  -debug
+    	Whether to enable debug logging
+  -retain uint
+    	Number of epochs to retain in the cache (default 7000)
