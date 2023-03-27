@@ -1,0 +1,3 @@
+*.swp
+beacon-cache-proxy
+docker-compose.yml
