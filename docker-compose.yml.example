@@ -1,0 +1,30 @@
+version: "3.3"
+services:
+  beacon-cache-proxy:
+    container_name: beacon-cache-proxy
+    build: .
+    image: beacon-cache-proxy:devel
+    restart: unless-stopped
+    volumes:
+      - beacon-cache-data:/var/beacon-cache
+    ports:
+      - 127.0.0.1:55052:5052
+    networks:
+      - net
+    command:
+      - -addr
+      - 0.0.0.0:5052
+      - -bn-url
+      - http://eth2:5052
+      - -data-dir
+      - /var/beacon-cache
+      - -debug
+      - -retain
+      - "7000"
+volumes:
+  beacon-cache-data:
+networks:
+  net:
+    name: rocketpool_net
+    external: true
+
