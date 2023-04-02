@@ -1,21 +1,27 @@
 package cache
 
 import (
-	"errors"
 	"fmt"
 	"io"
 	"os"
 	"sort"
 
-	"github.com/klauspost/compress/zstd"
+	"github.com/jshufro/beacon-cache-proxy/cache/pb"
+	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
 )
+
+var protoJsonOpts protojson.MarshalOptions = protojson.MarshalOptions{
+	EmitUnpopulated: true,
+	UseProtoNames:   true,
+}
 
 type diskCache struct {
 	path string
 }
 
 func (d diskCache) fileName(key string) string {
-	return d.path + "/" + key + ".zstd"
+	return d.path + "/" + key + ".proto"
 }
 
 func (d diskCache) Peek(key string) (bool, error) {
@@ -46,36 +52,52 @@ func (d diskCache) Get(key string) ([]byte, error) {
 		os.Remove(fileName)
 		return nil, err
 	}
+	defer f.Close()
 
-	decoder, err := zstd.NewReader(f)
+	// Parse protobuf
+	pbData, err := io.ReadAll(f)
 	if err != nil {
 		os.Remove(fileName)
-		return nil, err
+		return nil, fmt.Errorf("Error reading cached file %s: %w", fileName, err)
 	}
 
-	return io.ReadAll(decoder)
+	m := pb.CommitteesResponse{}
+	err = proto.Unmarshal(pbData, &m)
+	if err != nil {
+		os.Remove(fileName)
+		return nil, fmt.Errorf("Error parsing cached protobuf for file %s", fileName, err)
+	}
+
+	// Convert to json
+	return protoJsonOpts.Marshal(&m)
 }
 
 func (d diskCache) Set(key string, value []byte) error {
 	fileName := d.fileName(key)
 
 	if _, err := os.Stat(fileName); !os.IsNotExist(err) {
-		return fmt.Errorf("error while checking for file %s: %v", fileName, err)
+		return fmt.Errorf("error while checking for file %s: %w", fileName, err)
 	}
 
 	f, err := os.Create(fileName)
 	if err != nil {
-		return fmt.Errorf("error creating cache file %s: %v", fileName, err)
+		return fmt.Errorf("error creating cache file %s: %w", fileName, err)
 	}
 	defer f.Close()
 
-	compressor, err := zstd.NewWriter(f, zstd.WithEncoderLevel(zstd.SpeedFastest))
+	// Serialize proto
+	m := pb.CommitteesResponse{}
+	err = protojson.Unmarshal(value, &m)
 	if err != nil {
-		return errors.New("unable to create zstd compressor")
+		return fmt.Errorf("error converting json to protobuf for file %s: %w", fileName, err)
 	}
-	defer compressor.Close()
 
-	_, err = compressor.Write(value)
+	bytes, err := proto.Marshal(&m)
+	if err != nil {
+		return fmt.Errorf("error marshalling protobuf for file %s: %w", fileName, err)
+	}
+
+	_, err = f.Write(bytes)
 	return err
 }
 

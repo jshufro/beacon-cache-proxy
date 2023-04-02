@@ -1,0 +1,15 @@
+syntax = "proto3";
+package pb;
+option go_package = "./pb";
+
+message CommitteesResponseData {
+	uint64 index = 1;
+	uint64 slot = 2;
+	repeated uint64 validators = 3;
+}
+
+message CommitteesResponse {
+	repeated CommitteesResponseData data = 1;
+	bool execution_optimistic = 2;
+	bool finalized = 3;
+}
