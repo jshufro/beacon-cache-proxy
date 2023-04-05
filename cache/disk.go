@@ -3,8 +3,10 @@ package cache
 import (
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"sort"
+	"strings"
 
 	"github.com/jshufro/beacon-cache-proxy/cache/pb"
 	"google.golang.org/protobuf/encoding/protojson"
@@ -21,7 +23,7 @@ type diskCache struct {
 }
 
 func (d diskCache) fileName(key string) string {
-	return d.path + "/" + key + ".proto"
+	return d.path + "/" + key + ".pb"
 }
 
 func (d diskCache) Peek(key string) (bool, error) {
@@ -37,20 +39,20 @@ func (d diskCache) Peek(key string) (bool, error) {
 	return true, nil
 }
 
-func (d diskCache) Get(key string) ([]byte, error) {
+func (d diskCache) Get(key string) ([]byte, http.Header, error) {
 	fileName := d.fileName(key)
 	if _, err := os.Stat(fileName); err != nil {
 		if os.IsNotExist(err) {
-			return nil, nil
+			return nil, nil, nil
 		}
 
-		return nil, err
+		return nil, nil, err
 	}
 
 	f, err := os.Open(fileName)
 	if err != nil {
 		os.Remove(fileName)
-		return nil, err
+		return nil, nil, err
 	}
 	defer f.Close()
 
@@ -58,18 +60,15 @@ func (d diskCache) Get(key string) ([]byte, error) {
 	pbData, err := io.ReadAll(f)
 	if err != nil {
 		os.Remove(fileName)
-		return nil, fmt.Errorf("Error reading cached file %s: %w", fileName, err)
+		return nil, nil, fmt.Errorf("Error reading cached file %s: %w", fileName, err)
 	}
 
-	m := pb.CommitteesResponse{}
-	err = proto.Unmarshal(pbData, &m)
-	if err != nil {
-		os.Remove(fileName)
-		return nil, fmt.Errorf("Error parsing cached protobuf for file %s", fileName, err)
+	headers := make(map[string][]string)
+	headers["Content-Type"] = []string{
+		"application/protobuf",
 	}
 
-	// Convert to json
-	return protoJsonOpts.Marshal(&m)
+	return pbData, headers, nil
 }
 
 func (d diskCache) Set(key string, value []byte) error {
@@ -170,4 +169,46 @@ func NewDiskCache(path string) (diskCache, error) {
 	}
 
 	return d, nil
+}
+
+func Conv(file string) error {
+	stat, err := os.Stat(file)
+	if err != nil {
+
+		return err
+	}
+
+	f, err := os.Open(file)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	file = strings.TrimSuffix(file, ".bin")
+
+	// Convert json to proto
+	outFile, err := os.OpenFile(file+".pb", os.O_CREATE|os.O_RDWR, stat.Mode())
+	if err != nil {
+		return err
+	}
+	defer outFile.Close()
+
+	value, err := io.ReadAll(f)
+	if err != nil {
+		return err
+	}
+
+	m := pb.CommitteesResponse{}
+	err = protojson.Unmarshal(value, &m)
+	if err != nil {
+		return fmt.Errorf("error converting json to protobuf for file %s: %w", file, err)
+	}
+
+	bytes, err := proto.Marshal(&m)
+	if err != nil {
+		return fmt.Errorf("error marshalling protobuf for file %s: %w", file, err)
+	}
+
+	_, err = outFile.Write(bytes)
+	return err
 }

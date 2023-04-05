@@ -69,6 +69,7 @@ func onCachingProxyResponse(resp *http.Response) error {
 func cachedQuery(w http.ResponseWriter, r *http.Request) {
 	var cached []byte
 	var err error
+	var headers http.Header
 	logger.Debug("Proxying committees query", zap.String("path", r.URL.String()))
 	vars := mux.Vars(r)
 	e, ok := vars["epoch"]
@@ -84,7 +85,7 @@ func cachedQuery(w http.ResponseWriter, r *http.Request) {
 		goto pass
 	}
 
-	cached, err = c.Get(e)
+	cached, headers, err = c.Get(e)
 	if err != nil {
 		logger.Warn("Error querying cache", zap.Error(err))
 		goto pass
@@ -92,9 +93,14 @@ func cachedQuery(w http.ResponseWriter, r *http.Request) {
 
 	if cached != nil {
 		// We already have the data for this, short-circuit the proxy
+		for k, v := range headers {
+			for _, vv := range v {
+				w.Header().Set(k, vv)
+			}
+		}
 		w.WriteHeader(http.StatusOK)
 		w.Write(cached)
-		logger.Debug("cache hit", zap.String("epoch", e))
+		logger.Debug("cache hit", zap.String("epoch", e), zap.String("Content-Type", w.Header().Get("Content-Type")))
 		return
 	}
 
@@ -147,8 +153,17 @@ func main() {
 	dataDirFlag := flag.String("data-dir", "/tmp/treegen-proxy", "Path in which to save cache data")
 	retain := flag.Uint("retain", 7000, "Number of epochs to retain in the cache")
 	debug := flag.Bool("debug", false, "Whether to enable debug logging")
+	conv := flag.String("conv", "", "File to convert to pb")
 
 	flag.Parse()
+
+	if *conv != "" {
+		err := cache.Conv(*conv)
+		if err != nil {
+			panic(err)
+		}
+		return
+	}
 
 	if *bnURLFlag == "" {
 		fmt.Fprintf(os.Stderr, "Invalid -bn-url:\n")
