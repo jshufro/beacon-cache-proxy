@@ -1,13 +1,16 @@
 package cache
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 
+	lru "github.com/hashicorp/golang-lru/v2"
 	"github.com/jshufro/beacon-cache-proxy/cache/pb"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
@@ -20,6 +23,7 @@ var protoJsonOpts protojson.MarshalOptions = protojson.MarshalOptions{
 
 type diskCache struct {
 	path string
+	c    *lru.Cache[string, []byte]
 }
 
 func (d diskCache) fileName(key string) string {
@@ -39,20 +43,58 @@ func (d diskCache) Peek(key string) (bool, error) {
 	return true, nil
 }
 
-func (d diskCache) Get(key string) ([]byte, http.Header, error) {
+func (d diskCache) warmingRead(key string, cacheOnly bool) (io.ReadCloser, error) {
 	fileName := d.fileName(key)
+	cached, ok := d.c.Peek(fileName)
+	if ok {
+		return io.NopCloser(bytes.NewReader(cached)), nil
+	}
 	if _, err := os.Stat(fileName); err != nil {
 		if os.IsNotExist(err) {
-			return nil, nil, nil
+			return nil, nil
 		}
 
-		return nil, nil, err
+		return nil, err
 	}
 
 	f, err := os.Open(fileName)
 	if err != nil {
+		return nil, err
+	}
+
+	if cacheOnly {
+		defer f.Close()
+		data, err := io.ReadAll(f)
+		if err != nil {
+			return nil, err
+		}
+		d.c.Add(fileName, data)
+		return nil, nil
+	}
+
+	defer func() {
+		// Attempt to read the next 32 blobs unless they're already in the cache
+		start, err := strconv.ParseUint(key, 10, 64)
+		if err != nil {
+			return
+		}
+		for i := start + 1; i <= start+32; i++ {
+			k := fmt.Sprint(i)
+			d.warmingRead(k, true)
+		}
+	}()
+	return f, nil
+}
+
+func (d diskCache) Get(key string) ([]byte, http.Header, error) {
+	fileName := d.fileName(key)
+	f, err := d.warmingRead(key, false)
+	if err != nil {
 		os.Remove(fileName)
 		return nil, nil, err
+	}
+	if f == nil {
+		return nil, nil, nil
 	}
 	defer f.Close()
 
@@ -152,10 +194,16 @@ func (d diskCache) Prune(n uint) (uint, error) {
 
 func NewDiskCache(path string) (diskCache, error) {
 	var d diskCache
+	var err error
 	d.path = path
 
+	d.c, err = lru.New[string, []byte](256)
+	if err != nil {
+		return diskCache{}, err
+	}
+
 	// Check if the path exists
-	_, err := os.Stat(path)
+	_, err = os.Stat(path)
 	if err == nil {
 		return d, nil
 	}
