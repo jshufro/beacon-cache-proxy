@@ -86,7 +86,7 @@ func (d diskCache) warmingRead(key string, cacheOnly bool) (io.ReadCloser, error
 	return f, nil
 }
 
-func (d diskCache) Get(key string) ([]byte, http.Header, error) {
+func (d diskCache) Get(header http.Header, key string) ([]byte, http.Header, error) {
 	fileName := d.fileName(key)
 	f, err := d.warmingRead(key, false)
 	if err != nil {
@@ -105,12 +105,33 @@ func (d diskCache) Get(key string) ([]byte, http.Header, error) {
 		return nil, nil, fmt.Errorf("Error reading cached file %s: %w", fileName, err)
 	}
 
-	headers := make(map[string][]string)
-	headers["Content-Type"] = []string{
-		"application/protobuf",
+	if strings.EqualFold(header.Get("Accept"), "application/protobuf") {
+		headers := make(map[string][]string)
+		headers["Content-Type"] = []string{
+			"application/protobuf",
+		}
+
+		return pbData, headers, nil
 	}
 
-	return pbData, headers, nil
+	// Convert pbData to json
+	m := pb.CommitteesResponse{}
+	err = proto.Unmarshal(pbData, &m)
+	if err != nil {
+		os.Remove(fileName)
+		return nil, nil, fmt.Errorf("Error parsing protobuf from cached file %s: %w", fileName, err)
+	}
+	out, err := protoJsonOpts.Marshal(&m)
+	if err != nil {
+		os.Remove(fileName)
+		return nil, nil, fmt.Errorf("Error marshaling json from cached file %s: %w", fileName, err)
+	}
+
+	headers := make(map[string][]string)
+	headers["Content-Type"] = []string{
+		"application/json",
+	}
+	return out, headers, nil
 }
 
 func (d diskCache) Set(key string, value []byte) error {

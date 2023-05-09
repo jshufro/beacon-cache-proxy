@@ -85,7 +85,7 @@ func cachedQuery(w http.ResponseWriter, r *http.Request) {
 		goto pass
 	}
 
-	cached, headers, err = c.Get(e)
+	cached, headers, err = c.Get(r.Header, e)
 	if err != nil {
 		logger.Warn("Error querying cache", zap.Error(err))
 		goto pass
